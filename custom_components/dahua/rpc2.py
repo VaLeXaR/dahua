@@ -9,7 +9,6 @@ import logging
 import sys
 
 import aiohttp
-
 from custom_components.dahua.models import CoaxialControlIOStatus
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -99,6 +98,14 @@ class DahuaRpc2Client:
                   'passwordType': "Default"}
         return await self.request(method=method, params=params, url=url)
 
+    async def request_wrap(self, method, params=None, object_id=None, extra=None, url=None, verify_result=True):
+        try:
+            return await self.request(method=method, params=params, object_id=object_id, extra=extra, url=url, verify_result=verify_result)
+        except (aiohttp.ClientError, ConnectionError):
+            await self.login()
+            return await self.request(method=method, params=params, object_id=object_id, extra=extra, url=url, verify_result=verify_result)
+
+
     async def logout(self) -> bool:
         """Logs out of the current session. Returns true if the logout was successful"""
         try:
@@ -131,7 +138,25 @@ class DahuaRpc2Client:
         data = await self.get_config({"name": "General"})
         return data["table"]["MachineName"]
 
-    async def get_coaxial_control_io_status(self, channel: int) -> CoaxialControlIOStatus:
+    async def get_coaxial_control_io_status(self, channel: int):
         """ async_get_coaxial_control_io_status returns the the current state of the speaker and white light. """
-        response = await self.request(method="CoaxialControlIO.getStatus", params={"channel": channel})
-        return CoaxialControlIOStatus(response)
+        response = await self.request_wrap(method="CoaxialControlIO.getStatus", params={"channel": channel})
+        return response["params"]["status"]
+
+    async def set_coaxial_control_state(self, channel: int, dahua_type: int, enabled: bool):
+        """
+        async_set_lighting_v2 will turn on or off the white light on the camera.
+
+        Type=1 -> white light on the camera. this is not the same as the infrared (IR) light. This is the white visible light on the camera
+        Type=2 -> siren. The siren will trigger for 10 seconds or so and then turn off. I don't know how to get the siren to play forever
+        NOTE: this is not the same as the infrared (IR) light. This is the white visible light on the camera
+        """
+
+        # on = 1, off = 0
+        io = 1
+        if not enabled:
+            io = 2
+
+        _LOGGER.debug("Setting coaxial control state to %s: %s", io, dahua_type)
+
+        return await self.request_wrap(method="CoaxialControlIO.control", params={"channel": channel, "info":[{"Type": dahua_type,"IO": io,"TriggerMode": 2}]})

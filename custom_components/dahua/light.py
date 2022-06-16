@@ -239,13 +239,13 @@ class DahuaSecurityLight(DahuaBaseEntity, LightEntity):
     async def async_turn_on(self, **kwargs):
         """Turn the light on"""
         channel = self._coordinator.get_channel()
-        await self._coordinator.client.async_set_coaxial_control_state(channel, SECURITY_LIGHT_TYPE, True)
+        await self._coordinator.rpc2.set_coaxial_control_state(channel, SECURITY_LIGHT_TYPE, True)
         await self._coordinator.async_refresh()
 
     async def async_turn_off(self, **kwargs):
         """Turn the light off"""
         channel = self._coordinator.get_channel()
-        await self._coordinator.client.async_set_coaxial_control_state(channel, SECURITY_LIGHT_TYPE, False)
+        await self._coordinator.rpc2.set_coaxial_control_state(channel, SECURITY_LIGHT_TYPE, False)
         await self._coordinator.async_refresh()
 
     @property

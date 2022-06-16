@@ -19,6 +19,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from custom_components.dahua.thread import DahuaEventThread, DahuaVtoEventThread
 from . import dahua_utils
 from .client import DahuaClient
+from .rpc2 import DahuaRpc2Client
 
 from .const import (
     CONF_EVENTS,
@@ -102,13 +103,14 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
 
         # The client used to communicate with Dahua devices
         self.client: DahuaClient = DahuaClient(username, password, address, port, rtsp_port, session)
+        self.rpc2: DahuaRpc2Client = DahuaRpc2Client(username, password, address, port, rtsp_port, session)
 
         self.platforms = []
         self.initialized = False
         self.model = ""
         self.connected = None
         self.events: list = events
-        self._supports_coaxial_control = False
+        self.async_stop = False
         self._supports_disarming_linkage = False
         self._supports_smart_motion_detection = False
         self._supports_lighting = False
@@ -162,6 +164,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
         """ Stop anything we need to stop """
         self.dahua_event_thread.stop()
         self.dahua_vto_event_thread.stop()
+        self.rpc2.logout()
 
     async def _async_update_data(self):
         """Reload the camera information"""
@@ -209,7 +212,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
                 self._serial_number = data.get("serialNumber")
 
                 try:
-                    await self.client.async_get_coaxial_control_io_status()
+                    await self.rpc2.get_coaxial_control_io_status(self._channel)
                     self._supports_coaxial_control = True
                 except ClientResponseError:
                     self._supports_coaxial_control = False
@@ -291,7 +294,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
             if self._supports_disarming_linkage:
                 coros.append(asyncio.ensure_future(self.client.async_get_disarming_linkage()))
             if self._supports_coaxial_control:
-                coros.append(asyncio.ensure_future(self.client.async_get_coaxial_control_io_status()))
+                coros.append(asyncio.ensure_future(self.rpc2.get_coaxial_control_io_status(self._channel)))
             if self._supports_smart_motion_detection:
                 coros.append(asyncio.ensure_future(self.client.async_get_smart_motion_detection()))
             if self.supports_smart_motion_detection_amcrest():
@@ -304,11 +307,6 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
             for result in results:
                 if result is not None:
                     data.update(result)
-
-            if self.supports_security_light():
-                light_v2 = await self.client.async_get_lighting_v2()
-                if light_v2 is not None:
-                    data.update(light_v2)
 
             return data
         except Exception as exception:
@@ -492,14 +490,15 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
         Returns true if this camera has a siren. For example, the IPC-HDW3849HP-AS-PV does
         https://dahuawiki.com/Template:NameConvention
         """
-        return "-AS-PV" in self.model
+        return self._supports_coaxial_control and self.data.get("Speaker", "") is not None
 
     def supports_security_light(self) -> bool:
         """
         Returns true if this camera has the red/blue flashing security light feature.  For example, the
         IPC-HDW3849HP-AS-PV does https://dahuawiki.com/Template:NameConvention
         """
-        return "-AS-PV" in self.model or self.model == "AD410"
+
+        return self._supports_coaxial_control and self.data.get("WhiteLight", "") is not None
 
     def is_doorbell(self) -> bool:
         """ Returns true if this is a doorbell (VTO) """
@@ -543,7 +542,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
 
     def is_siren_on(self) -> bool:
         """ Returns true if the camera siren is on """
-        return self.data.get("status.status.Speaker", "").lower() == "on"
+        return self.data.get("Speaker", "").lower() == "on"
 
     def get_device_name(self) -> str:
         """ returns the device name, e.g. Cam 2 """
@@ -604,7 +603,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
 
     def is_security_light_on(self) -> bool:
         """Return true if the security light is on. This is the red/blue flashing light"""
-        return self.data.get("status.status.WhiteLight", "") == "On"
+        return self.data.get("WhiteLight", "") == "On"
 
     def get_profile_mode(self) -> str:
         # profile_mode 0=day, 1=night, 2=scene
@@ -651,6 +650,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     coordinator.dahua_event_thread.stop()
     coordinator.dahua_vto_event_thread.stop()
+    coordinator.rpc2.logout()
     unloaded = all(
         await asyncio.gather(
             *[

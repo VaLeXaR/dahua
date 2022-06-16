@@ -168,13 +168,13 @@ class DahuaSirenBinarySwitch(DahuaBaseEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
         """Turn on/enable the camera's siren"""
         channel = self._coordinator.get_channel()
-        await self._coordinator.client.async_set_coaxial_control_state(channel, SIREN_TYPE, True)
+        await self._coordinator.rpc2.set_coaxial_control_state(channel, SIREN_TYPE, True)
         await self._coordinator.async_refresh()
 
     async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
         """Turn off/disable camera siren"""
         channel = self._coordinator.get_channel()
-        await self._coordinator.client.async_set_coaxial_control_state(channel, SIREN_TYPE, False)
+        await self._coordinator.rpc2.set_coaxial_control_state(channel, SIREN_TYPE, False)
         await self._coordinator.async_refresh()
 
     @property
