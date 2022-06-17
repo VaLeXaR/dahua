@@ -164,7 +164,7 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
         """ Stop anything we need to stop """
         self.dahua_event_thread.stop()
         self.dahua_vto_event_thread.stop()
-        self.rpc2.logout()
+        await self.rpc2.logout()
 
     async def _async_update_data(self):
         """Reload the camera information"""
@@ -211,6 +211,8 @@ class DahuaDataUpdateCoordinator(DataUpdateCoordinator):
                 self.machine_name = data.get("table.General.MachineName")
                 self._serial_number = data.get("serialNumber")
 
+                await self.rpc2.login()
+                
                 try:
                     await self.rpc2.get_coaxial_control_io_status(self._channel)
                     self._supports_coaxial_control = True
@@ -650,7 +652,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     coordinator.dahua_event_thread.stop()
     coordinator.dahua_vto_event_thread.stop()
-    coordinator.rpc2.logout()
+    await coordinator.rpc2.logout()
     unloaded = all(
         await asyncio.gather(
             *[

@@ -7,14 +7,26 @@ import hashlib
 import json
 import logging
 import sys
-
 import aiohttp
-from custom_components.dahua.models import CoaxialControlIOStatus
+import asyncio
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
 if sys.version_info > (3, 0):
     unicode = str
+
+class Timer:
+    def __init__(self, timeout, callback):
+        self._timeout = timeout
+        self._callback = callback
+        self._task = asyncio.ensure_future(self._job())
+
+    async def _job(self):
+        await asyncio.sleep(self._timeout)
+        await self._callback()
+
+    def cancel(self):
+        self._task.cancel()
 
 
 class DahuaRpc2Client:
@@ -30,6 +42,7 @@ class DahuaRpc2Client:
         self._username = username
         self._password = password
         self._session = session
+        self._keep_alive_interval = 0
         self._rtsp_port = rtsp_port
         self._session_id = None
         self._id = 0
@@ -96,27 +109,42 @@ class DahuaRpc2Client:
                   'clientType': "Dahua3.0-Web3.0",
                   'authorityType': "Default",
                   'passwordType': "Default"}
-        return await self.request(method=method, params=params, url=url)
+        login_response = await self.request(method=method, params=params, url=url)
 
-    async def request_wrap(self, method, params=None, object_id=None, extra=None, url=None, verify_result=True):
-        try:
-            return await self.request(method=method, params=params, object_id=object_id, extra=extra, url=url, verify_result=verify_result)
-        except (aiohttp.ClientError, ConnectionError):
-            await self.login()
-            return await self.request(method=method, params=params, object_id=object_id, extra=extra, url=url, verify_result=verify_result)
+        keep_alive_interval = login_response['params']['keepAliveInterval']
 
+        if keep_alive_interval is not None:
+            self._keep_alive_interval = keep_alive_interval - 5
+            Timer(self._keep_alive_interval, self.keep_alive)
+
+        return login_response
 
     async def logout(self) -> bool:
         """Logs out of the current session. Returns true if the logout was successful"""
         try:
             response = await self.request(method="global.logout")
             if response['result'] is True:
+                self._keep_alive_interval = None
                 return True
             else:
                 _LOGGER.debug("Failed to log out of Dahua device %s", self._base)
                 return False
         except Exception as exception:
             return False
+
+    async def keep_alive(self):
+        _LOGGER.debug("Keep alive RCP2")
+
+        if self._keep_alive_interval is not None:
+            Timer(self._keep_alive_interval, self.keep_alive)
+
+        request_data = {
+            "timeout": 300,
+            "action": False
+        }
+
+        await self.request(method="global.keepAlive", params=request_data)
+
 
     async def current_time(self):
         """Get the current time on the device."""
@@ -140,7 +168,7 @@ class DahuaRpc2Client:
 
     async def get_coaxial_control_io_status(self, channel: int):
         """ async_get_coaxial_control_io_status returns the the current state of the speaker and white light. """
-        response = await self.request_wrap(method="CoaxialControlIO.getStatus", params={"channel": channel})
+        response = await self.request(method="CoaxialControlIO.getStatus", params={"channel": channel})
         return response["params"]["status"]
 
     async def set_coaxial_control_state(self, channel: int, dahua_type: int, enabled: bool):
@@ -159,4 +187,13 @@ class DahuaRpc2Client:
 
         _LOGGER.debug("Setting coaxial control state to %s: %s", io, dahua_type)
 
-        return await self.request_wrap(method="CoaxialControlIO.control", params={"channel": channel, "info":[{"Type": dahua_type,"IO": io,"TriggerMode": 2}]})
+        request_params = {
+            "channel": channel,
+            "info": [{
+                "Type": dahua_type,
+                "IO": io,
+                "TriggerMode": 2
+            }]
+        }
+
+        return await self.request(method="CoaxialControlIO.control", params=request_params)
